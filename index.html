@@ -128,7 +128,7 @@ footer{color:#ce6797}
 <section class="card noprint">
   <div class="grid">
     <div class="full"><label for="name">اسم المادة</label><input id="name" placeholder="مثلا: هياكل بيانات"></div>
-    <div><label for="units">المتراكم عليك (محاضرات / أجزاء)</label><input id="units" type="number" min="1" value="5"></div>
+    <div><label for="units">المتراكم عليك (محاضرات / أجزاء)</label><input id="units" type="number" min="1" step="1" value="5"></div>
     <div><label for="per">ساعات المحاضرة الواحدة</label><input id="per" type="number" min="0.5" step="0.5" value="1.5"></div>
     <div><label for="pri">الأولوية</label><select id="pri"><option value="1">عادية</option><option value="2">مهمة</option><option value="3">ضرورية</option></select></div>
     <div><label for="exam">ميعاد الامتحان (اختياري)</label><input id="exam" type="date"></div>
@@ -169,38 +169,48 @@ function renderList(){
   }).join("")
 }
 function plan(){
-  var n=S.subjects.length,start=new Date(S.start+"T00:00:00"),slots=Math.round(S.hours*2);
-  var rem=S.subjects.map(function(s){return s.units*s.per}),need=rem.slice(),days=[];
+  var n=S.subjects.length,start=new Date(S.start+"T00:00:00"),H=S.hours;
+  var lec=S.subjects.map(function(s){return Math.max(1,Math.round(s.units))}),need=lec.slice(),days=[];
   for(var d=0;d<7;d++){
     var date=new Date(start);date.setDate(start.getDate()+d);
-    var used=S.subjects.map(function(){return 0}),got=S.subjects.map(function(){return 0});
-    for(var k=0;k<slots;k++){
+    var used=S.subjects.map(function(){return 0}),got=S.subjects.map(function(){return 0}),budget=H,any=false;
+    while(true){
       var best=-1,bs=0;
       for(var i=0;i<n;i++){
         var s=S.subjects[i];
-        if(rem[i]<=0)continue;
+        if(lec[i]<=0)continue;
+        if(any&&s.per>budget+1e-9)continue;
         var left=null;
         if(s.exam){left=Math.round((new Date(s.exam+"T00:00:00")-date)/864e5);if(left<0)continue}
         var urg=left===null?1:1+Math.max(0,7-left)/3;
-        var sc=rem[i]*s.pri*urg/(1+used[i]*1.2);
+        var sc=(lec[i]/need[i])*(1+(s.pri-1)*0.5)*urg/(1+used[i]*1.2);
         if(sc>bs){bs=sc;best=i}
       }
       if(best<0)break;
-      got[best]+=0.5;used[best]+=0.5;rem[best]-=0.5
+      var c=S.subjects[best];
+      got[best]+=1;used[best]+=c.per;lec[best]-=1;budget-=c.per;any=true;
+      if(budget<=1e-9)break
     }
     days.push({date:date,got:got})
   }
-  return {days:days,rem:rem,need:need}
+  return {days:days,rem:lec,need:need}
 }
-function h(x){return (Math.round(x*2)/2).toString().replace(".5"," ونص").replace(/^0 /,"")}
+function hrs(x){
+  x=Math.round(x*2)/2;var w=Math.floor(x),hf=x-w>=0.5;
+  if(w===0)return "نص ساعة";
+  var base=w===1?"ساعة":w===2?"ساعتين":w<=10?w+" ساعات":w+" ساعة";
+  return hf?base+" ونص":base
+}
+function lecs(n){return n===1?"محاضرة":n===2?"محاضرتين":n<=10?n+" محاضرات":n+" محاضرة"}
 function generate(){
   S.hours=parseFloat($("hours").value)||4;S.start=$("start").value||iso(new Date());save();
   var out=$("out");
   if(!S.subjects.length){out.innerHTML='<p class="note">ضيف مادة واحدة على الأقل الأول.</p>';return}
   var p=plan(),html='<h2>جدولك</h2>';
-  var total=0,left=0;p.need.forEach(function(x,i){total+=x;left+=p.rem[i]});
-  if(left>0.01)html+='<p class="note">الأسبوع ده مش كفاية لكل المتراكم: فاضل حوالي '+h(left)+' ساعة. زوّد ساعات اليوم أو كمّل الباقي الأسبوع الجاي.</p>';
-  else html+='<p class="lead">الجدول ده بيغطي كل المتراكم ('+h(total)+' ساعة) في الأسبوع. استراحة 10 دقايق كل ساعة.</p>';
+  var totL=0,totH=0,leftL=0,leftH=0;
+  S.subjects.forEach(function(s,i){totL+=p.need[i];totH+=p.need[i]*s.per;leftL+=p.rem[i];leftH+=p.rem[i]*s.per});
+  if(leftL>0)html+='<p class="note">الأسبوع ده مش كفاية لكل المتراكم: فاضل '+lecs(leftL)+' ('+hrs(leftH)+'). زوّد ساعات اليوم أو كمّل الباقي الأسبوع الجاي.</p>';
+  else html+='<p class="lead">الجدول ده بيغطي كل المتراكم ('+lecs(totL)+' · '+hrs(totH)+') في الأسبوع. استراحة 10 دقايق كل ساعة.</p>';
   p.days.forEach(function(day){
     var items=[];
     day.got.forEach(function(g,i){if(g>0)items.push({i:i,g:g})});
@@ -209,7 +219,7 @@ function generate(){
     if(!items.length)html+='<div class="empty">استراحه محارب</div>';
     items.forEach(function(it){
       var s=S.subjects[it.i];
-      html+='<div class="item" style="--c:'+COL[it.i%COL.length]+'"><b>'+esc(s.name)+'</b><span>'+h(it.g)+' ساعة · حوالي '+(it.g/s.per).toFixed(1)+' من المحاضرة</span></div>'
+      html+='<div class="item" style="--c:'+COL[it.i%COL.length]+'"><b>'+esc(s.name)+'</b><span>'+lecs(it.g)+' · '+hrs(it.g*s.per)+'</span></div>'
     });
     html+='</div>'
   });
@@ -221,8 +231,9 @@ function generate(){
   out.innerHTML=html;
   out.scrollIntoView({behavior:"smooth"})
 }
+
 $("add").onclick=function(){
-  var name=$("name").value.trim(),units=parseFloat($("units").value),per=parseFloat($("per").value);
+  var name=$("name").value.trim(),units=Math.round(parseFloat($("units").value)),per=parseFloat($("per").value);
   if(!name||!(units>0)||!(per>0)){$("name").focus();return}
   var obj={name:name,units:units,per:per,pri:parseInt($("pri").value,10),exam:$("exam").value||""};
   if(ed>=0){S.subjects[ed]=obj}else{S.subjects.push(obj)}
